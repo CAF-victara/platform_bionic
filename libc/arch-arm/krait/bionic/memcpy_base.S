@@ -66,11 +66,11 @@
 
 ENTRY(MEMCPY_BASE)
 MEMCPY_BASE_ALIGNED:
-        .cfi_startproc
+       // .cfi_startproc
 	.save {r0, r9, r10, lr}
-        .cfi_def_cfa_offset 8
-	.cfi_rel_offset r0, 0
-	.cfi_rel_offset lr, 4
+       // .cfi_def_cfa_offset 8
+	//.cfi_rel_offset r0, 0
+	//.cfi_rel_offset lr, 4
 	cmp	r2, #4
 	blt	.Lneon_lt4
 	cmp	r2, #16
@@ -210,6 +210,6 @@ MEMCPY_BASE_ALIGNED:
 .Lneon_exit:
 	pop	{r0, lr}
 	bx	lr
-        .cfi_endproc
+        //.cfi_endproc
 END(MEMCPY_BASE)
 

@@ -29,44 +29,38 @@
 #include "debug_stacktrace.h"
 
 #include <dlfcn.h>
+#include <inttypes.h>
+#include <malloc.h>
 #include <unistd.h>
 #include <unwind.h>
 #include <sys/types.h>
 
 #include "debug_mapinfo.h"
-#include "libc_logging.h"
+#include "malloc_debug_disable.h"
+#include "private/libc_logging.h"
 
-/* depends how the system includes define this */
-#ifdef HAVE_UNWIND_CONTEXT_STRUCT
-typedef struct _Unwind_Context __unwind_context;
+#if defined(__LP64__)
+#define PAD_PTR "016" PRIxPTR
 #else
-typedef _Unwind_Context __unwind_context;
+#define PAD_PTR "08" PRIxPTR
 #endif
 
-static mapinfo_t* gMapInfo = NULL;
-static void* gDemangler;
-typedef char* (*DemanglerFn)(const char*, char*, size_t*, int*);
-static DemanglerFn gDemanglerFn = NULL;
+typedef struct _Unwind_Context __unwind_context;
+
+extern "C" char* __cxa_demangle(const char*, char*, size_t*, int*);
+
+static mapinfo_t* g_map_info = NULL;
 
 __LIBC_HIDDEN__ void backtrace_startup() {
-  gMapInfo = mapinfo_create(getpid());
-  gDemangler = dlopen("libgccdemangle.so", RTLD_NOW);
-  if (gDemangler != NULL) {
-    void* sym = dlsym(gDemangler, "__cxa_demangle");
-    gDemanglerFn = reinterpret_cast<DemanglerFn>(sym);
-  }
+  ScopedDisableDebugCalls disable;
+
+  g_map_info = mapinfo_create(getpid());
 }
 
 __LIBC_HIDDEN__ void backtrace_shutdown() {
-  mapinfo_destroy(gMapInfo);
-  dlclose(gDemangler);
-}
+  ScopedDisableDebugCalls disable;
 
-static char* demangle(const char* symbol) {
-  if (gDemanglerFn == NULL) {
-    return NULL;
-  }
-  return (*gDemanglerFn)(symbol, NULL, NULL, NULL);
+  mapinfo_destroy(g_map_info);
 }
 
 struct stack_crawl_state_t {
@@ -91,7 +85,7 @@ static _Unwind_Reason_Code trace_function(__unwind_context* context, void* arg) 
     return _URC_NO_REASON;
   }
 
-#ifdef __arm__
+#if defined(__arm__)
   /*
    * The instruction pointer is pointing at the instruction after the bl(x), and
    * the _Unwind_Backtrace routine already masks the Thumb mode indicator (LSB
@@ -114,12 +108,16 @@ static _Unwind_Reason_Code trace_function(__unwind_context* context, void* arg) 
 }
 
 __LIBC_HIDDEN__ int get_backtrace(uintptr_t* frames, size_t max_depth) {
+  ScopedDisableDebugCalls disable;
+
   stack_crawl_state_t state(frames, max_depth);
   _Unwind_Backtrace(trace_function, &state);
   return state.frame_count;
 }
 
 __LIBC_HIDDEN__ void log_backtrace(uintptr_t* frames, size_t frame_count) {
+  ScopedDisableDebugCalls disable;
+
   uintptr_t self_bt[16];
   if (frames == NULL) {
     frame_count = get_backtrace(self_bt, 16);
@@ -130,32 +128,33 @@ __LIBC_HIDDEN__ void log_backtrace(uintptr_t* frames, size_t frame_count) {
                     "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\n");
 
   for (size_t i = 0 ; i < frame_count; ++i) {
-    void* offset = 0;
+    uintptr_t offset = 0;
     const char* symbol = NULL;
 
     Dl_info info;
     if (dladdr((void*) frames[i], &info) != 0) {
-      offset = info.dli_saddr;
+      offset = reinterpret_cast<uintptr_t>(info.dli_saddr);
       symbol = info.dli_sname;
     }
 
-    uintptr_t rel_pc;
-    const mapinfo_t* mi = (gMapInfo != NULL) ? mapinfo_find(gMapInfo, frames[i], &rel_pc) : NULL;
+    uintptr_t rel_pc = offset;
+    const mapinfo_t* mi = (g_map_info != NULL) ? mapinfo_find(g_map_info, frames[i], &rel_pc) : NULL;
     const char* soname = (mi != NULL) ? mi->name : info.dli_fname;
     if (soname == NULL) {
       soname = "<unknown>";
     }
     if (symbol != NULL) {
-      // TODO: we might need a flag to say whether it's safe to allocate (demangling allocates).
-      char* demangled_symbol = demangle(symbol);
+      char* demangled_symbol = __cxa_demangle(symbol, NULL, NULL, NULL);
       const char* best_name = (demangled_symbol != NULL) ? demangled_symbol : symbol;
 
-      __libc_format_log(ANDROID_LOG_ERROR, "libc", "          #%02d  pc %08x  %s (%s+0x%x)",
-                        i, rel_pc, soname, best_name, frames[i] - (uintptr_t) offset);
+      __libc_format_log(ANDROID_LOG_ERROR, "libc",
+                        "          #%02zd  pc %" PAD_PTR "  %s (%s+%" PRIuPTR ")",
+                        i, rel_pc, soname, best_name, frames[i] - offset);
 
       free(demangled_symbol);
     } else {
-      __libc_format_log(ANDROID_LOG_ERROR, "libc", "          #%02d  pc %08x  %s",
+      __libc_format_log(ANDROID_LOG_ERROR, "libc",
+                        "          #%02zd  pc %" PAD_PTR "  %s",
                         i, rel_pc, soname);
     }
   }

@@ -10,15 +10,22 @@
  *	%ebp: arg5                -   callee save
  */
 
-#include <asm/unistd.h>
-#include <machine/asm.h>
+#include <private/bionic_asm.h>
 
 ENTRY(syscall)
     # Push the callee save registers.
     push    %ebx
+    .cfi_adjust_cfa_offset 4
+    .cfi_rel_offset ebx, 0
     push    %esi
+    .cfi_adjust_cfa_offset 4
+    .cfi_rel_offset esi, 0
     push    %edi
+    .cfi_adjust_cfa_offset 4
+    .cfi_rel_offset edi, 0
     push    %ebp
+    .cfi_adjust_cfa_offset 4
+    .cfi_rel_offset ebp, 0
 
     # Load all the arguments from the calling frame.
     # (Not all will be valid, depending on the syscall.)
@@ -34,19 +41,26 @@ ENTRY(syscall)
     int     $0x80
 
     # Error?
-    cmpl    $-4095, %eax
+    cmpl    $-MAX_ERRNO, %eax
     jb      1f
     # Yes, so set errno.
     negl    %eax
     pushl   %eax
-    call    __set_errno
+    call    __set_errno_internal
     addl    $4, %esp
-    orl     $-1, %eax
 1:
     # Restore the callee save registers.
     pop    %ebp
+    .cfi_adjust_cfa_offset -4
+    .cfi_restore ebp
     pop    %edi
+    .cfi_adjust_cfa_offset -4
+    .cfi_restore edi
     pop    %esi
+    .cfi_adjust_cfa_offset -4
+    .cfi_restore esi
     pop    %ebx
+    .cfi_adjust_cfa_offset -4
+    .cfi_restore ebx
     ret
 END(syscall)

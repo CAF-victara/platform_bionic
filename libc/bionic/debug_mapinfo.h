@@ -33,8 +33,11 @@
 
 struct mapinfo_t {
   struct mapinfo_t* next;
-  unsigned start;
-  unsigned end;
+  uintptr_t start;
+  uintptr_t end;
+  uintptr_t offset;
+  uintptr_t load_base;
+  bool load_base_read;
   char name[];
 };
 
